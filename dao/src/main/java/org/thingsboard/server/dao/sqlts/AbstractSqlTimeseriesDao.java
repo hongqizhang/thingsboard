@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2019 The Thingsboard Authors
+ * Copyright © 2016-2020 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,69 +18,49 @@ package org.thingsboard.server.dao.sqlts;
 import com.google.common.base.Function;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
-import com.google.common.util.concurrent.ListeningExecutorService;
-import com.google.common.util.concurrent.MoreExecutors;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.thingsboard.server.common.data.id.EntityId;
 import org.thingsboard.server.common.data.id.TenantId;
-import org.thingsboard.server.common.data.kv.Aggregation;
-import org.thingsboard.server.common.data.kv.BaseReadTsKvQuery;
-import org.thingsboard.server.common.data.kv.DeleteTsKvQuery;
 import org.thingsboard.server.common.data.kv.ReadTsKvQuery;
 import org.thingsboard.server.common.data.kv.TsKvEntry;
-import org.thingsboard.server.dao.sql.JpaAbstractDaoListeningExecutorService;
-import org.thingsboard.server.dao.timeseries.TsInsertExecutorType;
+import org.thingsboard.server.dao.sql.ScheduledLogExecutorComponent;
 
 import javax.annotation.Nullable;
-import javax.annotation.PostConstruct;
-import javax.annotation.PreDestroy;
 import java.util.List;
 import java.util.Objects;
-import java.util.Optional;
-import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
-public abstract class AbstractSqlTimeseriesDao extends JpaAbstractDaoListeningExecutorService {
+@Slf4j
+public abstract class AbstractSqlTimeseriesDao extends BaseAbstractSqlTimeseriesDao implements AggregationTimeseriesDao {
 
-    private static final String DESC_ORDER = "DESC";
+    protected static final long SECONDS_IN_DAY = TimeUnit.DAYS.toSeconds(1);
 
-    @Value("${sql.ts_inserts_executor_type}")
-    private String insertExecutorType;
+    @Autowired
+    protected ScheduledLogExecutorComponent logExecutor;
 
-    @Value("${sql.ts_inserts_fixed_thread_pool_size}")
-    private int insertFixedThreadPoolSize;
+    @Value("${sql.ts.batch_size:1000}")
+    protected int tsBatchSize;
 
-    @Value("${spring.datasource.hikari.maximumPoolSize}")
-    private int maximumPoolSize;
+    @Value("${sql.ts.batch_max_delay:100}")
+    protected long tsMaxDelay;
 
-    protected ListeningExecutorService insertService;
+    @Value("${sql.ts.stats_print_interval_ms:1000}")
+    protected long tsStatsPrintIntervalMs;
 
-    @PostConstruct
-    void init() {
-        Optional<TsInsertExecutorType> executorTypeOptional = TsInsertExecutorType.parse(insertExecutorType);
-        TsInsertExecutorType executorType;
-        executorType = executorTypeOptional.orElse(TsInsertExecutorType.FIXED);
-        switch (executorType) {
-            case SINGLE:
-                insertService = MoreExecutors.listeningDecorator(Executors.newSingleThreadExecutor());
-                break;
-            case FIXED:
-            case CACHED:
-                int poolSize = insertFixedThreadPoolSize;
-                if (poolSize <= 0) {
-                    poolSize = maximumPoolSize * 4;
-                }
-                insertService = MoreExecutors.listeningDecorator(Executors.newWorkStealingPool(poolSize));
-                break;
-        }
-    }
+    @Value("${sql.ts.batch_threads:4}")
+    protected int tsBatchThreads;
 
-    @PreDestroy
-    void preDestroy() {
-        if (insertService != null) {
-            insertService.shutdown();
-        }
-    }
+    @Value("${sql.timescale.batch_threads:4}")
+    protected int timescaleBatchThreads;
+
+    @Value("${sql.batch_sort:false}")
+    protected boolean batchSortEnabled;
+
+    @Value("${sql.ttl.ts.ts_key_value_ttl:0}")
+    private long systemTtl;
 
     protected ListenableFuture<List<TsKvEntry>> processFindAllAsync(TenantId tenantId, EntityId entityId, List<ReadTsKvQuery> queries) {
         List<ListenableFuture<List<TsKvEntry>>> futures = queries
@@ -102,29 +82,18 @@ public abstract class AbstractSqlTimeseriesDao extends JpaAbstractDaoListeningEx
         }, service);
     }
 
-    protected abstract ListenableFuture<List<TsKvEntry>> findAllAsync(TenantId tenantId, EntityId entityId, ReadTsKvQuery query);
-
-    protected ListenableFuture<List<TsKvEntry>> getTskvEntriesFuture(ListenableFuture<List<Optional<TsKvEntry>>> future) {
-        return Futures.transform(future, new Function<List<Optional<TsKvEntry>>, List<TsKvEntry>>() {
-            @Nullable
-            @Override
-            public List<TsKvEntry> apply(@Nullable List<Optional<TsKvEntry>> results) {
-                if (results == null || results.isEmpty()) {
-                    return null;
-                }
-                return results.stream()
-                        .filter(Optional::isPresent)
-                        .map(Optional::get)
-                        .collect(Collectors.toList());
+    protected long computeTtl(long ttl) {
+        if (systemTtl > 0) {
+            if (ttl == 0) {
+                ttl = systemTtl;
+            } else {
+                ttl = Math.min(systemTtl, ttl);
             }
-        }, service);
+        }
+        return ttl;
     }
 
-    protected ListenableFuture<List<TsKvEntry>> findNewLatestEntryFuture(TenantId tenantId, EntityId entityId, DeleteTsKvQuery query) {
-        long startTs = 0;
-        long endTs = query.getStartTs() - 1;
-        ReadTsKvQuery findNewLatestQuery = new BaseReadTsKvQuery(query.getKey(), startTs, endTs, endTs - startTs, 1,
-                Aggregation.NONE, DESC_ORDER);
-        return findAllAsync(tenantId, entityId, findNewLatestQuery);
+    protected int getDataPointDays(TsKvEntry tsKvEntry, long ttl) {
+        return tsKvEntry.getDataPoints() * Math.max(1, (int) (ttl / SECONDS_IN_DAY));
     }
 }

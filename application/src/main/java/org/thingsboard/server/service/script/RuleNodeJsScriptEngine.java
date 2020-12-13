@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2019 The Thingsboard Authors
+ * Copyright © 2016-2020 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,9 +21,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.google.common.collect.Sets;
 import com.google.common.util.concurrent.Futures;
 import com.google.common.util.concurrent.ListenableFuture;
+import com.google.common.util.concurrent.MoreExecutors;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 import org.thingsboard.server.common.data.id.EntityId;
+import org.thingsboard.server.common.data.id.TenantId;
 import org.thingsboard.server.common.msg.TbMsg;
 import org.thingsboard.server.common.msg.TbMsgMetaData;
 
@@ -42,13 +44,15 @@ public class RuleNodeJsScriptEngine implements org.thingsboard.rule.engine.api.S
     private final JsInvokeService sandboxService;
 
     private final UUID scriptId;
+    private final TenantId tenantId;
     private final EntityId entityId;
 
-    public RuleNodeJsScriptEngine(JsInvokeService sandboxService, EntityId entityId, String script, String... argNames) {
+    public RuleNodeJsScriptEngine(TenantId tenantId, JsInvokeService sandboxService, EntityId entityId, String script, String... argNames) {
+        this.tenantId = tenantId;
         this.sandboxService = sandboxService;
         this.entityId = entityId;
         try {
-            this.scriptId = this.sandboxService.eval(JsScriptType.RULE_NODE_SCRIPT, script, argNames).get();
+            this.scriptId = this.sandboxService.eval(tenantId, JsScriptType.RULE_NODE_SCRIPT, script, argNames).get();
         } catch (Exception e) {
             Throwable t = e;
             if (e instanceof ExecutionException) {
@@ -94,7 +98,7 @@ public class RuleNodeJsScriptEngine implements org.thingsboard.rule.engine.api.S
             String newData = data != null ? data : msg.getData();
             TbMsgMetaData newMetadata = metadata != null ? new TbMsgMetaData(metadata) : msg.getMetaData().copy();
             String newMessageType = !StringUtils.isEmpty(messageType) ? messageType : msg.getType();
-            return new TbMsg(msg.getId(), newMessageType, msg.getOriginator(), newMetadata, newData, msg.getRuleChainId(), msg.getRuleNodeId(), msg.getClusterPartition());
+            return TbMsg.transformMsg(msg, newMessageType, msg.getOriginator(), newMetadata, newData);
         } catch (Throwable th) {
             th.printStackTrace();
             throw new RuntimeException("Failed to unbind message data from javascript result", th);
@@ -121,7 +125,7 @@ public class RuleNodeJsScriptEngine implements org.thingsboard.rule.engine.api.S
             } else {
                 return Futures.immediateFuture(unbindMsg(json, msg));
             }
-        });
+        }, MoreExecutors.directExecutor());
     }
 
     @Override
@@ -137,6 +141,11 @@ public class RuleNodeJsScriptEngine implements org.thingsboard.rule.engine.api.S
     @Override
     public JsonNode executeJson(TbMsg msg) throws ScriptException {
         return executeScript(msg);
+    }
+
+    @Override
+    public ListenableFuture<JsonNode> executeJsonAsync(TbMsg msg) throws ScriptException {
+        return executeScriptAsync(msg);
     }
 
     @Override
@@ -169,7 +178,7 @@ public class RuleNodeJsScriptEngine implements org.thingsboard.rule.engine.api.S
             } else {
                 return Futures.immediateFuture(json.asBoolean());
             }
-        });
+        }, MoreExecutors.directExecutor());
     }
 
     @Override
@@ -197,7 +206,7 @@ public class RuleNodeJsScriptEngine implements org.thingsboard.rule.engine.api.S
     private JsonNode executeScript(TbMsg msg) throws ScriptException {
         try {
             String[] inArgs = prepareArgs(msg);
-            String eval = sandboxService.invokeFunction(this.scriptId, inArgs[0], inArgs[1], inArgs[2]).get().toString();
+            String eval = sandboxService.invokeFunction(tenantId, this.scriptId, inArgs[0], inArgs[1], inArgs[2]).get().toString();
             return mapper.readTree(eval);
         } catch (ExecutionException e) {
             if (e.getCause() instanceof ScriptException) {
@@ -214,7 +223,7 @@ public class RuleNodeJsScriptEngine implements org.thingsboard.rule.engine.api.S
 
     private ListenableFuture<JsonNode> executeScriptAsync(TbMsg msg) {
         String[] inArgs = prepareArgs(msg);
-        return Futures.transformAsync(sandboxService.invokeFunction(this.scriptId, inArgs[0], inArgs[1], inArgs[2]),
+        return Futures.transformAsync(sandboxService.invokeFunction(tenantId, this.scriptId, inArgs[0], inArgs[1], inArgs[2]),
                 o -> {
                     try {
                         return Futures.immediateFuture(mapper.readTree(o.toString()));
@@ -227,7 +236,7 @@ public class RuleNodeJsScriptEngine implements org.thingsboard.rule.engine.api.S
                             return Futures.immediateFailedFuture(new ScriptException(e));
                         }
                     }
-                });
+                }, MoreExecutors.directExecutor());
     }
 
     public void destroy() {

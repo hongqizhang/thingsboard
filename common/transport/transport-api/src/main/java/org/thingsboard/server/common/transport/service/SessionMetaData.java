@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2019 The Thingsboard Authors
+ * Copyright © 2016-2020 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,21 +27,17 @@ import java.util.concurrent.ScheduledFuture;
 @Data
 class SessionMetaData {
 
-    private final TransportProtos.SessionInfoProto sessionInfo;
+    private volatile TransportProtos.SessionInfoProto sessionInfo;
     private final TransportProtos.SessionType sessionType;
     private final SessionMsgListener listener;
 
-    private ScheduledFuture scheduledFuture;
-
+    private volatile ScheduledFuture scheduledFuture;
     private volatile long lastActivityTime;
+    private volatile long lastReportedActivityTime;
     private volatile boolean subscribedToAttributes;
     private volatile boolean subscribedToRPC;
 
-    SessionMetaData(
-            TransportProtos.SessionInfoProto sessionInfo,
-            TransportProtos.SessionType sessionType,
-            SessionMsgListener listener
-    ) {
+    SessionMetaData(TransportProtos.SessionInfoProto sessionInfo, TransportProtos.SessionType sessionType, SessionMsgListener listener) {
         this.sessionInfo = sessionInfo;
         this.sessionType = sessionType;
         this.listener = listener;
@@ -53,11 +49,15 @@ class SessionMetaData {
         this.lastActivityTime = System.currentTimeMillis();
     }
 
-    void setScheduledFuture(ScheduledFuture scheduledFuture) { this.scheduledFuture = scheduledFuture; }
+    void setScheduledFuture(ScheduledFuture scheduledFuture) {
+        this.scheduledFuture = scheduledFuture;
+    }
 
     public ScheduledFuture getScheduledFuture() {
         return scheduledFuture;
     }
 
-    public boolean hasScheduledFuture() { return null != this.scheduledFuture; }
+    public boolean hasScheduledFuture() {
+        return null != this.scheduledFuture;
+    }
 }
