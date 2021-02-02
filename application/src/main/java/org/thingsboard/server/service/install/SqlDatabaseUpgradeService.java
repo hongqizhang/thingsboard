@@ -1,5 +1,5 @@
 /**
- * Copyright © 2016-2020 The Thingsboard Authors
+ * Copyright © 2016-2021 The Thingsboard Authors
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -426,6 +426,7 @@ public class SqlDatabaseUpgradeService implements DatabaseEntitiesUpgradeService
                     log.info("Updating schema ...");
                     try {
                         conn.createStatement().execute("CREATE INDEX IF NOT EXISTS idx_device_device_profile_id ON device(tenant_id, device_profile_id);");
+                        conn.createStatement().execute("ALTER TABLE dashboard ALTER COLUMN configuration TYPE varchar;");
                         conn.createStatement().execute("UPDATE tb_schema_settings SET schema_version = 3002001;");
                     } catch (Exception e) {
                         log.error("Failed updating schema!!!", e);
